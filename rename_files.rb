@@ -1,66 +1,47 @@
 #!/usr/bin/env ruby
-require 'active_support/all'
-require 'chronic'
-require 'pry'
-require 'date_core'
-
-SPANISH_TO_ENGLISH_MONTH_NAMES = {
-  "enero" => "january",
-  "febrero" => "february",
-  "marzo" => "march",
-  "abril" => "april",
-  "mayo" => "may",
-  "junio" => "june",
-  "julio" => "july",
-  "agosto" => "august",
-  "septiembre" => "september",
-  "setiembre" => "september",
-  "octubre" => "october",
-  "noviembre" => "november",
-  "diciembre" => "december"
-  }
+require 'net/http'
+require 'json'
+require 'uri'
+require_relative 'lib/ollama/client'
 
 
-def replace_spanish_months_to_english_in_string(string)
-  SPANISH_TO_ENGLISH_MONTH_NAMES.each do |spanish, english|
-    string = string.downcase.gsub(/#{spanish}/i, english)
-  end
-  string
-end
+# Function to generate new filename using LLM
+def rename_file(original_name, model: ,ollama_url: )
+  basename = File.basename(original_name, ".*")
+  extname = File.extname(original_name)
+  
+  prompt = <<~PROMPT
+    Extract the date from this filename and format it as "Month Year" (e.g., "January 2024").
+    The filename may contain Spanish month names (enero, febrero, marzo, abril, mayo, junio, julio, agosto, septiembre, octubre, noviembre, diciembre).
+    Convert Spanish months to English and format as "Month Year".
+    
+    Filename: #{basename}
+    
+    Return ONLY the formatted date in the format "YYYY-MM-DD Month" (e.g., "2024-12-23", "2024-02-13").
+    If no date can be extracted, return "INVALID".
+  PROMPT
 
-def with_chronic(possible_date)
-  Chronic.parse(possible_date)
-end
-
-def with_DateTime(possible_date)
-  DateTime.parse(possible_date.gsub('-',' '))
-rescue Date::Error
-  nil
-end
-
-def format_new_date(original_name, extname)
-  original_name.strftime("%B %Y") + extname
-end
-
-# Function to generate new filename
-def rename_function(original_name)
-  translated_names = replace_spanish_months_to_english_in_string(original_name)
-  # Example: Add "renamed_" prefix
-  # You can modify this function to implement different renaming logic
-  basename = File.basename(translated_names, ".*")
-  extname = File.extname(translated_names)
-
-  if chronic_attempt = with_chronic(basename)
-    format_new_date(chronic_attempt, extname)
-  elsif dateTime_attempt = with_DateTime(basename)
-    format_new_date(dateTime_attempt, extname)
+  llm_response = query_ollama(prompt, model: , base_url: ollama_url)
+  
+  if llm_response && llm_response != "INVALID" && !llm_response.empty?
+    # Clean up the response - remove any extra text, quotes, etc.
+    formatted_date = llm_response.gsub(/['"]/, '').strip
+    
+    # Validate it looks like "Month Year" format
+    if formatted_date.match?(/^\d{4}-\d{2}-\d{2}$/)
+      formatted_date + extname
+    else
+      puts "Warning: LLM returned unexpected format: #{llm_response}. Using original name."
+      original_name
+    end
   else
+    puts "Warning: Could not extract date from '#{original_name}'. Using original name."
     original_name
   end
 end
 
 # Main function to process files
-def process_files(path)
+def process_files(path, model: , ollama_url: "http://localhost:11434")
   unless Dir.exist?(path)
     puts "Error: Path '#{path}' does not exist or is not a directory"
     exit 1
@@ -75,7 +56,8 @@ def process_files(path)
 
   files.each do |file|
     original_name = file
-    new_name = rename_function(original_name)
+
+    new_name = rename_file(original_name, model: model, ollama_url: ollama_url) 
     
     puts "Original: #{original_name} -> New: #{new_name}"
   end
@@ -83,13 +65,23 @@ end
 
 # CLI entry point
 if __FILE__ == $0
-  if ARGV.length != 1
-    puts "Usage: #{$0} <path>"
+  model = ARGV.include?('--model') ? ARGV[ARGV.index('--model') + 1] : "llama3.2"
+  ollama_url = ARGV.include?('--ollama-url') ? ARGV[ARGV.index('--ollama-url') + 1] : "http://localhost:11434"
+  
+  # Remove flags and their values from ARGV to get the path
+  path_args = ARGV.reject.with_index { |arg, i| 
+    (arg == '--model' && ARGV[i + 1]) ||
+    (arg == '--ollama-url' && ARGV[i + 1]) ||
+    (i > 0 && (ARGV[i - 1] == '--model' || ARGV[i - 1] == '--ollama-url'))
+  }
+  
+  if path_args.length != 1
     puts "Example: #{$0} /path/to/directory"
+    puts "Example (custom model): #{$0} /path/to/directory --model llama3.2"
     exit 1
   end
 
-  path = ARGV[0]
-  process_files(path)
+  path = path_args[0]
+  process_files(path, model: model, ollama_url: ollama_url)
 end
 
