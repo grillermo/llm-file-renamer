@@ -17,7 +17,7 @@ def rename_file(original_name, model: ,ollama_url: )
     
     Filename: #{basename}
     
-    Return ONLY the formatted date in the format "YYYY-MM-DD Month" (e.g., "2024-12-23", "2024-02-13").
+    Return ONLY the formatted date in the format "YYYY-MM-DD" (e.g., "2024-12-23", "2024-02-13").
     If no date can be extracted, return "INVALID".
   PROMPT
 
@@ -56,10 +56,30 @@ def process_files(path, model: , ollama_url: "http://localhost:11434")
 
   files.each do |file|
     original_name = file
+    original_path = File.join(path, original_name)
 
     new_name = rename_file(original_name, model: model, ollama_url: ollama_url) 
+    new_path = File.join(path, new_name)
     
-    puts "Original: #{original_name} -> New: #{new_name}"
+    # Skip if the new name is the same as the original
+    if original_name == new_name
+      puts "Skipping '#{original_name}' (no change needed)"
+      next
+    end
+    
+    # Check if target file already exists
+    if File.exist?(new_path)
+      puts "Warning: Target file '#{new_name}' already exists. Skipping '#{original_name}'"
+      next
+    end
+    
+    # Perform the actual rename
+    begin
+      File.rename(original_path, new_path)
+      puts "Renamed: #{original_name} -> #{new_name}"
+    rescue => e
+      puts "Error renaming '#{original_name}': #{e.message}"
+    end
   end
 end
 
